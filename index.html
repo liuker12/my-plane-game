@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>雷霆战机 精调版</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; color: white; font-family: '微软雅黑', sans-serif; }
+        canvas { display: block; margin: 0 auto; background: #050505; border: 2px solid #333; cursor: none; }
+        #ui { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); pointer-events: none; font-size: 18px; text-shadow: 2px 2px 2px #000; }
+        #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 40px; color: gold; display: none; text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        血量: <span id="hp" style="color:#ff4444">100</span> | 
+        波次: <span id="wave" style="color:#44ff44">1</span>/8 | 
+        子弹等级: <span id="lv" style="color:#4444ff">1</span>
+    </div>
+    <div id="msg" id="gameMsg">游戏结束<br><small style="font-size:20px">按F5重新开始</small></div>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 450;
+        canvas.height = 700;
+
+        // --- 图片加载 ---
+    const img_bg = new Image(); img_bg.src = 'bg.png';
+    const img_player = new Image(); img_player.src = 'player.png';
+    const img_enemy1 = new Image(); img_enemy1.src = 'enemy1.png'; // 普通
+    const img_enemy2 = new Image(); img_enemy2.src = 'enemy2.png'; // 射击
+    const img_bullet = new Image(); img_bullet.src = 'bullet.png';    
+    const img_enemy_bullet = new Image(); img_enemy_bullet.src = 'enemy_bullet.png'; 
+        // --- 游戏变量 ---
+        let player = { x: 200, y: 600, w: 40, h: 40, hp: 100, bulletLevel: 1 };
+        let bullets = [];      
+        let enemyBullets = []; 
+        let enemies = [];      
+        let hazards = [];      
+        let items = [];        
+        let frameCount = 0;    
+        let currentWave = 1;
+        let isGameOver = false;
+
+        // --- 1 & 4. 波次控制 (需求: 8波控制在1-2min) ---
+        // 这里的逻辑改为：每波敌人清空后，3秒进入下一波
+        function spawnWave() {
+            if (isGameOver) return;
+            if (enemies.length === 0) {
+                if (currentWave > 8) {
+                    endGame("通关大吉！");
+                    return;
+                }
+                
+                // 更新UI
+                document.getElementById('wave').innerText = currentWave;
+                
+                // 需求3 & 4: 敌人数量和射击频率随波次增加
+                let count = 5 + currentWave * 2; 
+                for (let i = 0; i < count; i++) {
+                    enemies.push({
+                        x: Math.random() * (canvas.width - 30),
+                        y: -Math.random() * 400 - 50, // 初始在屏幕外上方
+                        w: 30, h: 30,
+                        speed: 1 + (currentWave * 0.1), // 越往后飞得越快
+                        canShoot: currentWave >= 6 && Math.random() < 0.4
+                    });
+                }
+                currentWave++; 
+            }
+        }
+
+        // --- 游戏结束逻辑 (需求5) ---
+        function endGame(text) {
+            isGameOver = true;
+            const msgDiv = document.getElementById('msg');
+            msgDiv.innerHTML = text + "<br><small style='font-size:20px'>按F5重新开始</small>";
+            msgDiv.style.display = 'block';
+        }
+
+       function fireBullet() {
+    if (frameCount % 12 === 0) { 
+        let bulletW = 10; // 假设你的子弹图片宽度是 10
+        
+        bullets.push({ 
+            // 计算公式：飞机中心点 减去 子弹一半的宽度
+            x: player.x + (player.w / 2) - (bulletW / 2), 
+            y: player.y, 
+            w: bulletW, 
+            h: 20 
+        });
+    }
+}
+
+        function update() {
+            if (isGameOver) return;
+
+            frameCount++;
+            ctx.drawImage(img_bg,0, 0, canvas.width, canvas.height);
+
+            // 绘制玩家
+           ctx.drawImage(img_player, player.x, player.y, player.w, player.h);
+
+            // 玩家子弹逻辑
+            fireBullet();
+            bullets.forEach((b, bi) => {
+                b.y -= 10;
+               ctx.drawImage(img_bullet, b.x, b.y, b.w, b.h);
+                
+                // --- 需求2: 子弹击杀敌人 ---
+                enemies.forEach((e, ei) => {
+                    if (checkRectHit(b, e)) {
+                        enemies.splice(ei, 1); // 敌人消失
+                        bullets.splice(bi, 1); // 子弹消失
+                    }
+                });
+                if (b.y < 0) bullets.splice(bi, 1);
+            });
+
+            // 敌人逻辑
+            enemies.forEach((e, ei) => {
+                e.y += e.speed;
+               // 根据是普通怪还是射击怪切换图片
+             ctx.drawImage(e.canShoot ? img_enemy2 : img_enemy1, e.x, e.y, e.w, e.h);
+
+                // 敌人射击逻辑
+                if (e.canShoot && frameCount % 150 === 0) {
+                    enemyBullets.push({x: e.x + 15, y: e.y + 30, w: 6, h: 6});
+                }
+
+                // 需求2: 撞击掉血
+                if (checkRectHit(player, e)) {
+                    takeDamage(10);
+                    enemies.splice(ei, 1); // 撞到后敌人也消失
+                }
+
+                // 敌人飞出屏幕底部
+                if (e.y > canvas.height) {
+        takeDamage(2); // 漏掉一个怪扣 2 点血，数值你可以自己调
+        enemies.splice(ei, 1); // 记得要把这个敌人从数组删掉，否则会一直扣血
+    }
+            });
+
+            // 敌人子弹逻辑
+            enemyBullets.forEach((eb, ebi) => {
+                eb.y += 2;
+              ctx.drawImage(img_enemy_bullet, eb.x, eb.y, eb.w, eb.h);
+
+                if (checkRectHit(player, eb)) {
+                    takeDamage(5);
+                    enemyBullets.splice(ebi, 1);
+                }
+                if (eb.y > canvas.height) enemyBullets.splice(ebi, 1);
+            });
+
+            // --- 需求3: 黑洞 (降低频率 + 掉血) ---
+            if (frameCount % 800 === 0) { // 约10秒一个
+                hazards.push({ x: Math.random() * 350 + 50, y: Math.random() * 300 + 100, r: 40, timer: 250 });
+            }
+            hazards.forEach((h, hi) => {
+                h.timer--;
+                ctx.beginPath();
+                ctx.arc(h.x, h.y, h.r, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(138, 43, 226, 0.3)';
+                ctx.fill();
+                
+                // 黑洞掉血检测
+                let dist = Math.hypot(player.x+20 - h.x, player.y+20 - h.y);
+                if (dist < h.r + 15) takeDamage(0.3);
+
+                if (h.timer <= 0) hazards.splice(hi, 1);
+            });
+
+            // 弹药包
+            if (frameCount % 800 === 0) {
+                items.push({ x: Math.random() * 400, y: 0, w: 25, h: 25 });
+            }
+            items.forEach((it, ii) => {
+                it.y += 2;
+                ctx.fillStyle = '#00ff00';
+                ctx.fillRect(it.x, it.y, it.w, it.h);
+                if (checkRectHit(player, it)) {
+                    player.bulletLevel++;
+                    document.getElementById('lv').innerText = player.bulletLevel;
+                    items.splice(ii, 1);
+                }
+            });
+
+            spawnWave();
+            if (player.hp <= 0) endGame("战机坠毁！");
+            requestAnimationFrame(update);
+        }
+
+        function takeDamage(val) {
+            player.hp -= val;
+            document.getElementById('hp').innerText = Math.max(0, Math.floor(player.hp));
+        }
+
+        function checkRectHit(r1, r2) {
+            // 兼容圆形子弹和矩形检测
+            let r1w = r1.w || 8;
+            let r1h = r1.h || 8;
+            return r1.x < r2.x + r2.w && r1.x + r1w > r2.x && r1.y < r2.y + r2.h && r1.y + r1h > r2.y;
+        }
+
+        canvas.addEventListener('mousemove', (e) => {
+            let rect = canvas.getBoundingClientRect();
+            player.x = e.clientX - rect.left - player.w/2;
+            player.y = e.clientY - rect.top - player.h/2;
+            
+            // 边界检查
+            if (player.x < 0) player.x = 0;
+            if (player.x > canvas.width - player.w) player.x = canvas.width - player.w;
+            if (player.y < 0) player.y = 0;
+            if (player.y > canvas.height - player.h) player.y = canvas.height - player.h;
+        });
+
+        update();
+    </script>
+</body>
+</html>
